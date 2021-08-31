@@ -81,6 +81,9 @@ pub fn module<'a>(context: &'a Context) -> Option<Module<'a>> {
                     "modified" => info.get_modified().and_then(|count| {
                         format_count(config.modified, "git_status.modified", count)
                     }),
+                    "dirty" => info.get_dirty().and_then(|_| {
+                        format_symbol(config.dirty, "git_status.dirty")
+                    }),
                     "staged" => info
                         .get_staged()
                         .and_then(|count| format_count(config.staged, "git_status.staged", count)),
@@ -128,6 +131,13 @@ impl<'a> GitStatusInfo<'a> {
 
     pub fn get_ahead_behind(&self) -> Option<(Option<usize>, Option<usize>)> {
         self.get_repo_status().map(|data| (data.ahead, data.behind))
+    }
+
+    pub fn get_dirty(&self) -> Option<()> {
+        self.get_repo_status().and_then(|data| match data.dirty {
+            true => Some(()),
+            false => None
+        })
     }
 
     pub fn get_repo_status(&self) -> &Option<RepoStatus> {
@@ -227,6 +237,7 @@ struct RepoStatus {
     behind: Option<usize>,
     conflicted: usize,
     deleted: usize,
+    dirty: bool,
     renamed: usize,
     modified: usize,
     staged: usize,
@@ -252,14 +263,17 @@ impl RepoStatus {
     fn parse_normal_status(&mut self, short_status: &str) {
         if Self::is_deleted(short_status) {
             self.deleted += 1;
+            self.dirty = true;
         }
 
         if Self::is_modified(short_status) {
             self.modified += 1;
+            self.dirty = true;
         }
 
         if Self::is_staged(short_status) {
             self.staged += 1;
+            self.dirty = true;
         }
     }
 
@@ -268,10 +282,17 @@ impl RepoStatus {
             Some('1') => self.parse_normal_status(&s[2..4]),
             Some('2') => {
                 self.renamed += 1;
+                self.dirty = true;
                 self.parse_normal_status(&s[2..4])
             }
-            Some('u') => self.conflicted += 1,
-            Some('?') => self.untracked += 1,
+            Some('u') => {
+                self.conflicted += 1;
+                self.dirty = true;
+            },
+            Some('?') => {
+                self.untracked += 1;
+                self.dirty = true;
+            },
             Some('!') => (),
             Some(_) => log::error!("Unknown line type in git status output"),
             None => log::error!("Missing line type in git status output"),
@@ -512,6 +533,144 @@ mod tests {
             .path(&repo_dir.path())
             .collect();
         let expected = format_output("=1");
+
+        assert_eq!(expected, actual);
+        repo_dir.close()
+    }
+
+    #[test]
+    fn shows_dirty_from_conflicted() -> io::Result<()> {
+        let repo_dir = fixture_repo(FixtureProvider::Git)?;
+
+        create_conflict(repo_dir.path())?;
+
+        let actual = ModuleRenderer::new("git_status")
+            .config(toml::toml! {
+                [git_status]
+                format = "([\\[$dirty\\]]($style) )"
+                dirty = "*"
+            })
+            .path(&repo_dir.path())
+            .collect();
+        let expected = format_output("*");
+
+        assert_eq!(expected, actual);
+        repo_dir.close()
+    }
+
+    #[test]
+    fn shows_dirty_from_deleted() -> io::Result<()> {
+        let repo_dir = fixture_repo(FixtureProvider::Git)?;
+
+        create_deleted(repo_dir.path())?;
+
+        let actual = ModuleRenderer::new("git_status")
+            .config(toml::toml! {
+                [git_status]
+                format = "([\\[$dirty\\]]($style) )"
+                dirty = "*"
+            })
+            .path(&repo_dir.path())
+            .collect();
+        let expected = format_output("*");
+
+        assert_eq!(expected, actual);
+        repo_dir.close()
+    }
+
+    #[test]
+    fn shows_dirty_from_renamed() -> io::Result<()> {
+        let repo_dir = fixture_repo(FixtureProvider::Git)?;
+
+        create_renamed(repo_dir.path())?;
+
+        let actual = ModuleRenderer::new("git_status")
+            .config(toml::toml! {
+                [git_status]
+                format = "([\\[$dirty\\]]($style) )"
+                dirty = "*"
+            })
+            .path(&repo_dir.path())
+            .collect();
+        let expected = format_output("*");
+
+        assert_eq!(expected, actual);
+        repo_dir.close()
+    }
+
+    #[test]
+    fn shows_dirty_from_modified() -> io::Result<()> {
+        let repo_dir = fixture_repo(FixtureProvider::Git)?;
+
+        create_modified(repo_dir.path())?;
+
+        let actual = ModuleRenderer::new("git_status")
+            .config(toml::toml! {
+                [git_status]
+                format = "([\\[$dirty\\]]($style) )"
+                dirty = "*"
+            })
+            .path(&repo_dir.path())
+            .collect();
+        let expected = format_output("*");
+
+        assert_eq!(expected, actual);
+        repo_dir.close()
+    }
+
+    #[test]
+    fn shows_dirty_from_staged() -> io::Result<()> {
+        let repo_dir = fixture_repo(FixtureProvider::Git)?;
+
+        create_staged(repo_dir.path())?;
+
+        let actual = ModuleRenderer::new("git_status")
+            .config(toml::toml! {
+                [git_status]
+                format = "([\\[$dirty\\]]($style) )"
+                dirty = "*"
+            })
+            .path(&repo_dir.path())
+            .collect();
+        let expected = format_output("*");
+
+        assert_eq!(expected, actual);
+        repo_dir.close()
+    }
+
+    #[test]
+    fn shows_dirty_from_untracked() -> io::Result<()> {
+        let repo_dir = fixture_repo(FixtureProvider::Git)?;
+
+        create_untracked(repo_dir.path())?;
+
+        let actual = ModuleRenderer::new("git_status")
+            .config(toml::toml! {
+                [git_status]
+                format = "([\\[$dirty\\]]($style) )"
+                dirty = "*"
+            })
+            .path(&repo_dir.path())
+            .collect();
+        let expected = format_output("*");
+
+        assert_eq!(expected, actual);
+        repo_dir.close()
+    }
+
+    #[test]
+    fn doesnt_show_dirty_for_pristine_repo() -> io::Result<()> {
+        let repo_dir = fixture_repo(FixtureProvider::Git)?;
+
+        let actual = ModuleRenderer::new("git_status")
+            .config(toml::toml! {
+                [git_status]
+                format = "([\\[$dirty\\]]($style) )"
+                dirty = "*"
+            })
+            .path(&repo_dir.path())
+            .collect();
+        let expected = None;
 
         assert_eq!(expected, actual);
         repo_dir.close()
